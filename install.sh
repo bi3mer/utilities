@@ -22,10 +22,10 @@ for dir in "$ROOT"/*/; do
 
     if $PIP install -e "$dir" --quiet 2>&1; then
         echo "ok"
-        ((installed++))
+        installed=$((installed + 1))
     else
         echo "FAILED"
-        ((failed++))
+        failed=$((failed + 1))
     fi
 done
 

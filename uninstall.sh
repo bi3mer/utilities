@@ -22,10 +22,10 @@ for dir in "$ROOT"/*/; do
 
     if $PIP uninstall "$name" -y --quiet 2>&1; then
         echo "ok"
-        ((removed++))
+        removed=$((removed + 1))
     else
         echo "FAILED"
-        ((failed++))
+        failed=$((failed + 1))
     fi
 done
 
