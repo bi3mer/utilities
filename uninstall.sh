@@ -17,7 +17,7 @@ failed=0
 for dir in "$ROOT"/*/; do
     [ -f "$dir/pyproject.toml" ] || continue
 
-    name="$(basename "$dir")"
+    name="$(grep '^name' "$dir/pyproject.toml" | head -1 | sed 's/.*= *"\(.*\)"/\1/')"
     printf "Uninstalling %s ... " "$name"
 
     if $PIP uninstall "$name" -y --quiet 2>&1; then
@@ -32,14 +32,11 @@ done
 # Remove PATH entry and comment from shell rc files.
 BIN="$VENV/bin"
 
-for rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.zshrc"; do
-    [ -f "$rc" ] || continue
-    if grep -qF "$BIN" "$rc"; then
-        sed -i.bak "\\|# cmd_tools utilities|d;\\|$BIN|d" "$rc"
-        rm -f "$rc.bak"
-        echo "Removed PATH entry from $(basename "$rc")"
-    fi
-done
+if grep -qF "$BIN" "$HOME/.bashrc" 2>/dev/null; then
+    sed -i.bak "\\|# cmd_tools utilities|d;\\|$BIN|d" "$HOME/.bashrc"
+    rm -f "$HOME/.bashrc.bak"
+    echo "Removed PATH entry from .bashrc"
+fi
 
 echo ""
 echo "Done: $removed uninstalled, $failed failed."

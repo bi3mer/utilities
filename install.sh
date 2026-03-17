@@ -17,7 +17,7 @@ failed=0
 for dir in "$ROOT"/*/; do
     [ -f "$dir/pyproject.toml" ] || continue
 
-    name="$(basename "$dir")"
+    name="$(grep '^name' "$dir/pyproject.toml" | head -1 | sed 's/.*= *"\(.*\)"/\1/')"
     printf "Installing %s ... " "$name"
 
     if $PIP install -e "$dir" --quiet 2>&1; then
@@ -33,15 +33,12 @@ done
 BIN="$VENV/bin"
 PATH_LINE="export PATH=\"$BIN:\$PATH\""
 
-for rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.zshrc"; do
-    [ -f "$rc" ] || continue
-    if ! grep -qF "$BIN" "$rc"; then
-        echo "" >> "$rc"
-        echo "# cmd_tools utilities" >> "$rc"
-        echo "$PATH_LINE" >> "$rc"
-        echo "Added PATH entry to $(basename "$rc")"
-    fi
-done
+if ! grep -qF "$BIN" "$HOME/.bashrc" 2>/dev/null; then
+    echo "" >> "$HOME/.bashrc"
+    echo "# cmd_tools utilities" >> "$HOME/.bashrc"
+    echo "$PATH_LINE" >> "$HOME/.bashrc"
+    echo "Added PATH entry to .bashrc"
+fi
 
 echo ""
 echo "Done: $installed installed, $failed failed."
