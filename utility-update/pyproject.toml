@@ -3,21 +3,17 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["md_to_pdf"]
+py-modules = ["utility_update"]
 
 [tool.setuptools.package-dir]
 "" = "src"
 
 [project]
-name = "md_to_pdf"
+name = "utility_update"
 version = "0.1.0"
-description = "Convert a Markdown file to a color-inverted PDF."
+description = "Pull latest changes and reinstall all utilities."
 requires-python = ">=3.10"
-dependencies = [
-    "pymupdf",
-    "markdown",
-    "weasyprint",
-]
+dependencies = []
 
 [project.scripts]
-md_to_pdf = "md_to_pdf:main"
+utility-update = "utility_update:main"
