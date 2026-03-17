@@ -1,4 +1,4 @@
-"""Convert a Markdown file to a color-inverted PDF (black background, white text)."""
+"""Convert a Markdown file to PDF, optionally with inverted colors."""
 import argparse
 import os
 import sys
@@ -57,6 +57,19 @@ def md_to_pdf_bytes(md_path: Path, css: str) -> bytes:
     return HTML(string=html_doc).write_pdf()
 
 
+def save_pdf(pdf_bytes: bytes, dst: Path) -> None:
+    """Atomically write PDF bytes to disk."""
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".pdf", dir=dst.parent)
+    os.close(tmp_fd)
+    try:
+        Path(tmp_path).write_bytes(pdf_bytes)
+        Path(tmp_path).replace(dst)
+    except BaseException:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise
+    print(f"\nSaved → {dst}")
+
+
 def invert_pdf(pdf_bytes: bytes, dst: Path, dpi: int) -> None:
     """Rasterize each page of an in-memory PDF and invert its colors."""
     scale = dpi / 72
@@ -88,14 +101,19 @@ def invert_pdf(pdf_bytes: bytes, dst: Path, dpi: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Convert a Markdown file to a color-inverted PDF."
+        description="Convert a Markdown file to PDF."
     )
     parser.add_argument("markdown", type=Path, help="Path to the input Markdown file.")
+    parser.add_argument(
+        "--no-invert",
+        action="store_true",
+        help="Skip color inversion (produce a normal PDF).",
+    )
     parser.add_argument(
         "--dpi",
         type=int,
         default=144,
-        help="Resolution for rasterizing pages (default: 144).",
+        help="Resolution for rasterizing pages when inverting (default: 144).",
     )
     parser.add_argument(
         "--css",
@@ -134,8 +152,12 @@ def main() -> None:
             sys.exit(f"Error: CSS file not found: {args.css}")
         css = args.css.read_text(encoding="utf-8")
 
-    print(f"Converting: {src} → {dst}  ({args.dpi} dpi)")
+    print(f"Converting: {src} → {dst}")
     print("  rendering markdown to PDF ...")
     pdf_bytes = md_to_pdf_bytes(src, css)
-    print("  inverting colors ...")
-    invert_pdf(pdf_bytes, dst, args.dpi)
+
+    if args.no_invert:
+        save_pdf(pdf_bytes, dst)
+    else:
+        print(f"  inverting colors ({args.dpi} dpi) ...")
+        invert_pdf(pdf_bytes, dst, args.dpi)
