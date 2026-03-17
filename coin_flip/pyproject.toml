@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["coin_flip"]
+package-dir = {"" = "src"}
+
+[project]
+name = "coin_flip"
+version = "0.1.0"
+description = "Flip a coin."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+coin_flip = "coin_flip:main"
