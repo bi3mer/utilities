@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 VENV="$ROOT/.venv"
-
 if [ ! -d "$VENV" ]; then
     echo "No venv found at $VENV, nothing to uninstall."
     exit 0
@@ -11,14 +9,11 @@ fi
 
 PIP="$VENV/bin/pip"
 BIN="$VENV/bin"
-
 removed=0
 failed=0
-
 for dir in "$ROOT"/*/; do
     [ -d "$dir" ] || continue
     name="$(basename "$dir")"
-
     if [ -f "$dir/pyproject.toml" ]; then
         pkg="$(grep '^name' "$dir/pyproject.toml" | head -1 | sed 's/.*= *"\(.*\)"/\1/')"
         printf "Uninstalling %s (python) ... " "$pkg"
@@ -29,10 +24,14 @@ for dir in "$ROOT"/*/; do
             echo "FAILED"
             failed=$((failed + 1))
         fi
-
+    elif [ -f "$dir/dune-project" ]; then
+        printf "Uninstalling %s (dune) ... " "$name"
+        rm -f "$BIN/$name"
+        (cd "$dir" && dune clean) 2>/dev/null || true
+        echo "ok"
+        removed=$((removed + 1))
     elif [ -f "$dir/Makefile" ]; then
         printf "Uninstalling %s (make) ... " "$name"
-        # Remove symlinks from venv bin that point into this project.
         for link in "$BIN"/*; do
             [ -L "$link" ] || continue
             target="$(realpath "$link" 2>/dev/null || true)"
@@ -41,7 +40,6 @@ for dir in "$ROOT"/*/; do
                 ;;
             esac
         done
-        # Run make clean if available.
         make -C "$dir" clean --quiet 2>/dev/null || true
         echo "ok"
         removed=$((removed + 1))
