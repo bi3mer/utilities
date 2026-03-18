@@ -6,7 +6,6 @@ if [ ! -d "$VENV" ]; then
     echo "No venv found at $VENV, nothing to uninstall."
     exit 0
 fi
-
 PIP="$VENV/bin/pip"
 BIN="$VENV/bin"
 removed=0
@@ -14,6 +13,8 @@ failed=0
 for dir in "$ROOT"/*/; do
     [ -d "$dir" ] || continue
     name="$(basename "$dir")"
+    [ "$name" = "default-configs" ] && continue
+
     if [ -f "$dir/pyproject.toml" ]; then
         pkg="$(grep '^name' "$dir/pyproject.toml" | head -1 | sed 's/.*= *"\(.*\)"/\1/')"
         printf "Uninstalling %s (python) ... " "$pkg"

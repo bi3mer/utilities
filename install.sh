@@ -18,6 +18,9 @@ failed=0
 for dir in "$ROOT"/*/; do
     [ -d "$dir" ] || continue
     name="$(basename "$dir")"
+    [ "$name" = "default-configs" ] && continue
+
+    name="$(basename "$dir")"
 
     if [ -f "$dir/pyproject.toml" ]; then
         pkg="$(grep '^name' "$dir/pyproject.toml" | head -1 | sed 's/.*= *"\(.*\)"/\1/')"

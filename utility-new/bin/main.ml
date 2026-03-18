@@ -1,14 +1,10 @@
 let lang = ref ""
-let desc = ref ""
 let name = ref ""
 
 let speclist =
-  [
-    ("-l", Arg.Set_string lang, "Language to scaffold (c, ocaml, python)");
-    ("-d", Arg.Set_string desc, "One-line description");
-  ]
+  [ ("-l", Arg.Set_string lang, "Language to scaffold (c, ocaml, python)") ]
 
-let usage = "Usage: utility-new <name> -l <lang> [-d <desc>]"
+let usage = "Usage: utility-new <name> -l <lang>"
 
 let rec dirname_n path n =
   if n <= 0 then path else dirname_n (Filename.dirname path) (n - 1)
@@ -46,7 +42,25 @@ let () =
   else Unix.mkdir dir 0o755;
 
   match !lang with
-  | "c" -> ()
+  | "c" ->
+      print_endline "Building C project...";
+      Unix.symlink "../default-configs/.clangd" (Filename.concat dir ".clangd");
+      Unix.symlink "../default-configs/.clang-format"
+        (Filename.concat dir ".clang-format");
+
+      let configs = Filename.concat root "default-configs" in
+      copyfile
+        (Filename.concat configs "Makefile")
+        (Filename.concat dir "Makefile");
+
+      let src_dir = Filename.concat dir "src" in
+      Unix.mkdir src_dir 0o755;
+
+      copyfile
+        (Filename.concat configs "main.c")
+        (Filename.concat src_dir "main.c");
+
+      print_endline "Done!"
   | "python" ->
       print_endline "Building python project...";
       let src_dir = Filename.concat dir "src" in
