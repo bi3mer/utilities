@@ -63,24 +63,21 @@ let () =
       output_string f
         (Printf.sprintf
            {|[build-system]
-      requires = ["setuptools>=68.0"]
-      build-backend = "setuptools.build_meta"
-
-      [tool.setuptools]
-      py-modules = ["%s"]
-      package-dir = {"" = "src"}
-
-      [project]
-      name = "%s"
-      version = "0.1.0"
-      description = ""
-      requires-python = ">=3.10"
-      dependencies = []
-
-      [project.scripts]
-      %s = "%s:main"
-  |}
-           module_name module_name uname module_name);
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+[tool.setuptools]
+py-modules = ["main"]
+package-dir = {"" = "src"}
+[project]
+name = "%s"
+version = "0.1.0"
+description = ""
+requires-python = ">=3.10"
+dependencies = []
+[project.scripts]
+%s = "main:main"
+|}
+            module_name uname);
       close_out f;
 
       print_endline "Done!"
