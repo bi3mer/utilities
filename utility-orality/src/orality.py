@@ -1,157 +1,177 @@
 #!/usr/bin/env python3
 """
-orality.py — measures how natural a piece of writing is to say out loud.
+orality_server.py — web interface for the orality analyzer.
 
 Usage:
-    python3 orality.py myfile.txt
-    cat myfile.txt | python3 orality.py
-    python3 orality.py --help
+    python3 orality_server.py          # opens http://localhost:8000
+    python3 orality_server.py 9090     # custom port
 
-Metrics:
-    • Flesch Reading Ease          — syllable/sentence complexity proxy
-    • Mean sentence length         — shorter = more oral
-    • Sentence length std dev      — variety = more oral
-    • Lexical density              — content words / total words (lower = more oral)
-    • Coordination ratio           — and/but/so vs. subordinators (higher = more oral)
-    • Long-sentence ratio          — % of sentences over 30 words (lower = more oral)
-    • Orality score                — composite 0–100
+Expects index.html and app.js in the same directory.
+Dependencies: stanza, cmudict
 """
 
-import argparse
+import json
 import re
 import statistics
 import sys
+import webbrowser
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
+from urllib.parse import urlparse
 
+import cmudict as _cmudict_pkg
 import stanza
 
-# Download the English model on first run (tokenize, POS).
-# Subsequent runs use the cached model.
-stanza.download("en", processors="tokenize,pos", verbose=False)
-nlp = stanza.Pipeline("en", processors="tokenize,pos", verbose=False)
+STATIC_DIR = Path(__file__).parent.parent / "web"
+
+MIME = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+}
 
 # ---------------------------------------------------------------------------
-# Syllable counting (stanza doesn't provide this — keep the rule-based counter)
+# Lazy stanza loading
 # ---------------------------------------------------------------------------
+
+nlp = None
+
+
+def get_nlp():
+    global nlp
+    if nlp is not None:
+        return nlp
+    try:
+        nlp = stanza.Pipeline("en", processors="tokenize,pos", verbose=False)
+    except Exception:
+        stanza.download("en", processors="tokenize,pos", verbose=False)
+        nlp = stanza.Pipeline("en", processors="tokenize,pos", verbose=False)
+    return nlp
+
+
+# ---------------------------------------------------------------------------
+# CMU dict + rule-based syllable counting
+# ---------------------------------------------------------------------------
+
+_cmu = _cmudict_pkg.dict()
+
 
 VOWELS = set("aeiouy")
 
 
-def count_syllables(word: str) -> int:
+def _count_syllables_rule(word: str) -> int:
     word = re.sub(r"[^a-zA-Z]", "", word).lower()
     if not word:
         return 0
     if len(word) <= 3:
         return 1
-
     word = re.sub(r"(?<=[aeiou])es$", "e", word)
     word = re.sub(r"(?<=[^aeiou])e$", "", word)
-
     count = len(re.findall(r"[aeiouy]+", word))
-
     if word.endswith("le") and len(word) > 2 and word[-3] not in VOWELS:
         count += 1
     if word.endswith("ed") and len(word) > 2 and word[-3] not in VOWELS:
         count -= 1
-
     return max(1, count)
 
 
+def count_syllables(word: str) -> int:
+    clean = re.sub(r"[^a-zA-Z]", "", word).lower()
+    if not clean:
+        return 0
+    if clean in _cmu:
+        return sum(1 for ph in _cmu[clean][0] if ph[-1].isdigit())
+    return _count_syllables_rule(word)
+
+
 # ---------------------------------------------------------------------------
-# POS-based classification (Universal POS tags from stanza)
+# POS classification & contraction detection
 # ---------------------------------------------------------------------------
 
 CONTENT_POS = {"NOUN", "VERB", "ADJ", "ADV", "PROPN", "INTJ"}
 
+CONTRACTION_RE = re.compile(
+    r"(?i)\b("
+    r"\w+'t|\w+'re|\w+'ve|\w+'ll|\w+'d|\w+'m|\w+'s|let's"
+    r"|gonna|wanna|gotta|kinda|sorta|coulda|shoulda|woulda"
+    r")\b"
+)
 
-def is_content_word(upos: str) -> bool:
-    return upos in CONTENT_POS
+THRESH_LONG = 30
+THRESH_DENSE = 0.55
+THRESH_SYLLABLE = 1.8
+THRESH_SUBORD_HEAVY = 2
 
 
 # ---------------------------------------------------------------------------
-# Per-sentence analysis
+# Analysis (mirrors orality.py exactly)
 # ---------------------------------------------------------------------------
 
-# Thresholds for flagging sentences
-THRESH_LONG = 30          # words — sentences longer than this are "long"
-THRESH_DENSE = 0.55       # lexical density above this is "dense"
-THRESH_SYLLABLE = 1.8     # avg syllables/word above this is "hard"
-THRESH_SUBORD_HEAVY = 2   # subordinators with 0 coordinators = flag
 
-
-def analyse_sentence(sent) -> dict:
-    """Analyse a single stanza Sentence and return per-sentence metrics."""
+def analyse_sentence(sent) -> dict | None:
     words = [w for w in sent.words if w.text.isalpha()]
     if not words:
-        return {}
+        return None
 
     n = len(words)
     syllables = sum(count_syllables(w.text) for w in words)
-    syl_per_word = syllables / n if n else 0
+    syl_per_word = syllables / n
 
-    content = sum(1 for w in words if is_content_word(w.upos))
-    lex_density = content / n if n else 0
+    content = sum(1 for w in words if w.upos in CONTENT_POS)
+    lex_density = content / n
 
     coord = sum(1 for w in words if w.upos == "CCONJ")
     subord = sum(1 for w in words if w.upos == "SCONJ")
+    contractions = len(CONTRACTION_RE.findall(sent.text))
 
-    flesch = 206.835 - 1.015 * n - 84.6 * syl_per_word
-    flesch = max(0.0, min(100.0, flesch))
+    flesch = max(0.0, min(100.0, 206.835 - 1.015 * n - 84.6 * syl_per_word))
 
-    # Build list of flags for this sentence
     flags = []
     if n > THRESH_LONG:
-        flags.append(f"long ({n} words)")
+        flags.append({"type": "long", "label": f"Long sentence ({n} words)"})
     if lex_density > THRESH_DENSE:
-        flags.append(f"dense (lex {lex_density:.0%})")
+        flags.append({"type": "dense", "label": f"Dense ({lex_density:.0%} content words)"})
     if syl_per_word > THRESH_SYLLABLE:
-        flags.append(f"hard words ({syl_per_word:.2f} syl/w)")
+        flags.append({"type": "hard", "label": f"Hard words ({syl_per_word:.2f} syl/word)"})
     if subord >= THRESH_SUBORD_HEAVY and coord == 0:
-        flags.append(f"subordination-heavy ({subord} subord, 0 coord)")
-
-    # Reconstruct the sentence text from tokens
-    text = sent.text
+        flags.append({"type": "subord", "label": f"Subordination-heavy ({subord} subord, 0 coord)"})
 
     return {
-        "text": text,
+        "text": sent.text,
         "words": n,
-        "syllables_per_word": syl_per_word,
-        "lexical_density": lex_density,
-        "flesch": flesch,
+        "sylPerWord": round(syl_per_word, 3),
+        "lexDensity": round(lex_density, 3),
+        "flesch": round(flesch, 1),
         "coord": coord,
         "subord": subord,
+        "contractions": contractions,
         "flags": flags,
     }
 
 
-# ---------------------------------------------------------------------------
-# Document-level analysis
-# ---------------------------------------------------------------------------
-
-
-def flesch_reading_ease(words_per_sent: float, syllables_per_word: float) -> float:
-    return 206.835 - 1.015 * words_per_sent - 84.6 * syllables_per_word
-
-
-def analyse(text: str) -> dict:
-    doc = nlp(text)
+def analyse(text: str) -> dict | None:
+    doc = get_nlp()(text)
 
     sent_lengths = []
     sent_syllables = []
     all_upos = []
     coord_count = 0
     subord_count = 0
-    sent_details = []
+    contraction_count = 0
+    details = []
 
     for sent in doc.sentences:
         info = analyse_sentence(sent)
         if not info:
             continue
-
-        sent_details.append(info)
+        # Character offsets so the frontend can preserve inter-sentence gaps
+        info["startChar"] = sent.tokens[0].start_char
+        info["endChar"] = sent.tokens[-1].end_char
+        details.append(info)
         n = info["words"]
         sent_lengths.append(n)
-        sent_syllables.append(round(info["syllables_per_word"] * n))
+        sent_syllables.append(round(info["sylPerWord"] * n))
+        contraction_count += info["contractions"]
 
         for w in sent.words:
             if not w.text.isalpha():
@@ -163,233 +183,140 @@ def analyse(text: str) -> dict:
                 subord_count += 1
 
     if not sent_lengths:
-        return {}
+        return None
 
     total_words = sum(sent_lengths)
     total_syllables = sum(sent_syllables)
-    mean_sent_len = statistics.mean(sent_lengths)
-    std_sent_len = statistics.pstdev(sent_lengths) if len(sent_lengths) > 1 else 0.0
+    mean_sl = statistics.mean(sent_lengths)
+    std_sl = statistics.pstdev(sent_lengths) if len(sent_lengths) > 1 else 0.0
+    syl_pw = total_syllables / total_words if total_words else 0
+    flesch = max(0.0, min(100.0, 206.835 - 1.015 * mean_sl - 84.6 * syl_pw))
 
-    syllables_per_word = total_syllables / total_words if total_words else 0
-    flesch = flesch_reading_ease(mean_sent_len, syllables_per_word)
-    flesch = max(0.0, min(100.0, flesch))
-
-    content_words = sum(1 for upos in all_upos if is_content_word(upos))
-    lexical_density = content_words / total_words if total_words else 0
+    content_words = sum(1 for u in all_upos if u in CONTENT_POS)
+    lex_density = content_words / total_words if total_words else 0
 
     total_conj = coord_count + subord_count
     coord_ratio = coord_count / total_conj if total_conj else 0.5
 
-    long_sents = sum(1 for length in sent_lengths if length > 30)
-    long_sent_ratio = long_sents / len(sent_lengths)
+    long_sents = sum(1 for l in sent_lengths if l > 30)
+    long_ratio = long_sents / len(sent_lengths)
+    contraction_ratio = contraction_count / total_words if total_words else 0
 
-    return {
-        "sentences": len(sent_lengths),
-        "words": total_words,
-        "mean_sent_len": mean_sent_len,
-        "std_sent_len": std_sent_len,
-        "syllables_per_word": syllables_per_word,
-        "flesch": flesch,
-        "lexical_density": lexical_density,
-        "coord_ratio": coord_ratio,
-        "coord_count": coord_count,
-        "subord_count": subord_count,
-        "long_sent_ratio": long_sent_ratio,
-        "sent_details": sent_details,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Composite orality score
-# ---------------------------------------------------------------------------
-
-
-def orality_score(m: dict) -> tuple[float, dict[str, float]]:
-    components = {}
-
-    # Flesch: 0–100, higher = easier. Map [30, 90] → [0, 1]
-    components["flesch"] = max(0.0, min(1.0, (m["flesch"] - 30) / 60))
-
-    # Mean sentence length: Map [30, 8] → [0, 1] (inverted)
-    components["sent_length"] = max(0.0, min(1.0, (30 - m["mean_sent_len"]) / 22))
-
-    # Sentence length std dev: Map [0, 8] → [0, 1]
-    components["sent_variety"] = max(0.0, min(1.0, m["std_sent_len"] / 8))
-
-    # Lexical density: Map [0.6, 0.35] → [0, 1] (inverted)
-    components["lexical_density"] = max(
-        0.0, min(1.0, (0.6 - m["lexical_density"]) / 0.25)
-    )
-
-    # Coordination ratio: Map [0.3, 0.8] → [0, 1]
-    components["coordination"] = max(0.0, min(1.0, (m["coord_ratio"] - 0.3) / 0.5))
-
-    # Long sentence ratio: Map [0, 0.3] → [1, 0] (inverted)
-    components["long_sents"] = max(0.0, min(1.0, 1.0 - m["long_sent_ratio"] / 0.3))
+    c = {}
+    c["flesch"] = max(0.0, min(1.0, (flesch - 30) / 60))
+    c["sent_length"] = max(0.0, min(1.0, (30 - mean_sl) / 22))
+    c["sent_variety"] = max(0.0, min(1.0, std_sl / 15))
+    c["lexical_density"] = max(0.0, min(1.0, (0.6 - lex_density) / 0.25))
+    c["coordination"] = max(0.0, min(1.0, (coord_ratio - 0.3) / 0.5))
+    c["long_sents"] = max(0.0, min(1.0, 1.0 - long_ratio / 0.3))
+    c["contractions"] = max(0.0, min(1.0, contraction_ratio / 0.06))
 
     weights = {
-        "flesch": 0.20,
-        "sent_length": 0.25,
-        "sent_variety": 0.10,
-        "lexical_density": 0.20,
-        "coordination": 0.15,
-        "long_sents": 0.10,
+        "flesch": 0.18, "sent_length": 0.22, "sent_variety": 0.08,
+        "lexical_density": 0.18, "coordination": 0.12, "long_sents": 0.10,
+        "contractions": 0.12,
+    }
+    score = sum(c[k] * weights[k] for k in c) * 100
+
+    label = (
+        "Very oral" if score >= 80 else
+        "Mostly oral" if score >= 65 else
+        "Mixed" if score >= 50 else
+        "Mostly written" if score >= 35 else
+        "Very written"
+    )
+
+    return {
+        "score": round(score, 1),
+        "label": label,
+        "originalText": text,
+        "components": {k: round(v, 3) for k, v in c.items()},
+        "metrics": {
+            "sentences": len(sent_lengths),
+            "words": total_words,
+            "meanSentLen": round(mean_sl, 1),
+            "stdSentLen": round(std_sl, 1),
+            "sylPerWord": round(syl_pw, 2),
+            "flesch": round(flesch, 1),
+            "lexDensity": round(lex_density, 3),
+            "coordRatio": round(coord_ratio, 2),
+            "coordCount": coord_count,
+            "subordCount": subord_count,
+            "longRatio": round(long_ratio, 3),
+            "contractionRatio": round(contraction_ratio, 4),
+            "contractionCount": contraction_count,
+        },
+        "details": details,
     }
 
-    score = sum(components[k] * weights[k] for k in components) * 100
-    return score, components
-
 
 # ---------------------------------------------------------------------------
-# Rendering
+# HTTP handler
 # ---------------------------------------------------------------------------
 
-MAX_PREVIEW = 70  # max chars to show for sentence previews
 
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        path = urlparse(self.path).path.lstrip("/")
+        if path == "" or path == "index.html":
+            self._serve_file("index.html")
+        elif path == "app.js":
+            self._serve_file("app.js")
+        else:
+            self.send_error(404)
 
-def bar(value: float, width: int = 30) -> str:
-    filled = round(value * width)
-    return "█" * filled + "░" * (width - filled)
+    def do_POST(self):
+        if urlparse(self.path).path != "/analyse":
+            self.send_error(404)
+            return
 
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length))
+        text = body.get("text", "").strip()
 
-def score_label(score: float) -> str:
-    if score >= 80:
-        return "Very oral"
-    if score >= 65:
-        return "Mostly oral"
-    if score >= 50:
-        return "Mixed"
-    if score >= 35:
-        return "Mostly written"
-    return "Very written"
+        if not text:
+            self._json({"error": "No text provided."})
+            return
 
+        result = analyse(text)
+        if not result:
+            self._json({"error": "Couldn't parse any sentences."})
+            return
 
-def fmt_bar(label: str, value: float, lo: str, hi: str, width=24) -> str:
-    b = bar(value, width)
-    return f"  {label:<22} {b}  ({lo} ◀──▶ {hi})"
+        self._json(result)
 
+    def _serve_file(self, name):
+        filepath = STATIC_DIR / name
+        if not filepath.exists():
+            self.send_error(404, f"{name} not found in {STATIC_DIR}")
+            return
+        content = filepath.read_bytes()
+        mime = MIME.get(filepath.suffix, "application/octet-stream")
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
 
-def truncate(text: str, maxlen: int = MAX_PREVIEW) -> str:
-    text = text.replace("\n", " ").strip()
-    if len(text) <= maxlen:
-        return text
-    return text[: maxlen - 1] + "…"
+    def _json(self, obj):
+        payload = json.dumps(obj).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
 
-
-def render(m: dict, score: float, components: dict[str, float], verbose: bool) -> str:
-    lines = []
-    lines.append("")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    lines.append(f"  ORALITY SCORE   {score:.1f}/100   {score_label(score)}")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("")
-
-    lines.append("  Component breakdown  (left = written, right = oral)")
-    lines.append("")
-    lines.append(fmt_bar("Readability (Flesch)", components["flesch"], "dense", "easy"))
-    lines.append(fmt_bar("Sentence length", components["sent_length"], "long", "short"))
-    lines.append(
-        fmt_bar("Length variety", components["sent_variety"], "uniform", "varied")
-    )
-    lines.append(
-        fmt_bar("Lexical density", components["lexical_density"], "high", "low")
-    )
-    lines.append(
-        fmt_bar(
-            "Coordination ratio",
-            components["coordination"],
-            "subordinated",
-            "coordinated",
-        )
-    )
-    lines.append(
-        fmt_bar("Long sentence ratio", components["long_sents"], "many", "few")
-    )
-    lines.append("")
-
-    # Per-sentence diagnostics
-    flagged = [
-        (i, s) for i, s in enumerate(m["sent_details"], 1) if s["flags"]
-    ]
-    if flagged:
-        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        lines.append(f"  FLAGGED SENTENCES   ({len(flagged)} of {m['sentences']})")
-        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        lines.append("")
-        for num, s in flagged:
-            lines.append(f"  [{num}] {truncate(s['text'])}")
-            lines.append(f"       ⚑ {', '.join(s['flags'])}")
-            lines.append("")
-    else:
-        lines.append("  No sentences flagged — nice work!")
-        lines.append("")
-
-    if verbose:
-        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        lines.append("  Raw metrics")
-        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        lines.append("")
-        lines.append(f"    Sentences              {m['sentences']}")
-        lines.append(f"    Words                  {m['words']}")
-        lines.append(f"    Mean sentence length   {m['mean_sent_len']:.1f} words")
-        lines.append(f"    Sentence length σ      {m['std_sent_len']:.1f} words")
-        lines.append(f"    Syllables per word     {m['syllables_per_word']:.2f}")
-        lines.append(f"    Flesch Reading Ease    {m['flesch']:.1f}")
-        lines.append(f"    Lexical density        {m['lexical_density']:.2f}")
-        lines.append(f"    Coord conjunctions     {m['coord_count']}")
-        lines.append(f"    Subord conjunctions    {m['subord_count']}")
-        lines.append(f"    Coord ratio            {m['coord_ratio']:.2f}")
-        lines.append(f"    Long sentences (>30w)  {m['long_sent_ratio'] * 100:.0f}%")
-        lines.append("")
-
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("")
-    return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
+    def log_message(self, fmt, *args):
+        sys.stderr.write(f"  {args[0]}\n")
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Measure how natural a piece of writing is to say out loud.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-    parser.add_argument(
-        "file",
-        nargs="?",
-        type=Path,
-        help="Text file to analyse (reads stdin if omitted)",
-    )
-    parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Show raw metric values"
-    )
-    args = parser.parse_args()
-
-    if args.file:
-        try:
-            text = args.file.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            print(f"Error: file not found: {args.file}", file=sys.stderr)
-            sys.exit(1)
-    else:
-        text = sys.stdin.read()
-
-    text = text.strip()
-    if not text:
-        print("Error: no text to analyse.", file=sys.stderr)
-        sys.exit(1)
-
-    m = analyse(text)
-    if not m:
-        print("Error: couldn't parse any sentences from the input.", file=sys.stderr)
-        sys.exit(1)
-
-    score, components = orality_score(m)
-    print(render(m, score, components, args.verbose))
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+    print("Loading stanza model…")
+    get_nlp()
+    print(f"Ready — opening http://localhost:{port}")
+    webbrowser.open(f"http://localhost:{port}")
+    HTTPServer(("", port), Handler).serve_forever()
 
 
 if __name__ == "__main__":
