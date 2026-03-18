@@ -1,3 +1,0 @@
-(test
- (name test_utility_new)
- (libraries utility_new))
