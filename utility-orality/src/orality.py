@@ -18,17 +18,23 @@ Metrics:
 """
 
 import argparse
-import math
 import re
 import statistics
 import sys
 from pathlib import Path
 
+import stanza
+
+# Download the English model on first run (tokenize, POS).
+# Subsequent runs use the cached model.
+stanza.download("en", processors="tokenize,pos", verbose=False)
+nlp = stanza.Pipeline("en", processors="tokenize,pos", verbose=False)
+
 # ---------------------------------------------------------------------------
-# Syllable counting (Syl algorithm — no external deps)
+# Syllable counting (stanza doesn't provide this — keep the rule-based counter)
 # ---------------------------------------------------------------------------
 
-VOWELS = set("aeiouyAEIOUY")
+VOWELS = set("aeiouy")
 
 
 def count_syllables(word: str) -> int:
@@ -38,14 +44,11 @@ def count_syllables(word: str) -> int:
     if len(word) <= 3:
         return 1
 
-    # Strip common silent-e endings
     word = re.sub(r"(?<=[aeiou])es$", "e", word)
     word = re.sub(r"(?<=[^aeiou])e$", "", word)
 
-    # Count vowel groups
     count = len(re.findall(r"[aeiouy]+", word))
 
-    # Adjustments
     if word.endswith("le") and len(word) > 2 and word[-3] not in VOWELS:
         count += 1
     if word.endswith("ed") and len(word) > 2 and word[-3] not in VOWELS:
@@ -54,267 +57,75 @@ def count_syllables(word: str) -> int:
     return max(1, count)
 
 
-def syllable_count_sentence(words: list[str]) -> int:
-    return sum(count_syllables(w) for w in words)
+# ---------------------------------------------------------------------------
+# POS-based classification (Universal POS tags from stanza)
+# ---------------------------------------------------------------------------
+
+CONTENT_POS = {"NOUN", "VERB", "ADJ", "ADV", "PROPN", "INTJ"}
+
+
+def is_content_word(upos: str) -> bool:
+    return upos in CONTENT_POS
 
 
 # ---------------------------------------------------------------------------
-# Tokenisation
+# Per-sentence analysis
 # ---------------------------------------------------------------------------
 
-SENT_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"])")
+# Thresholds for flagging sentences
+THRESH_LONG = 30          # words — sentences longer than this are "long"
+THRESH_DENSE = 0.55       # lexical density above this is "dense"
+THRESH_SYLLABLE = 1.8     # avg syllables/word above this is "hard"
+THRESH_SUBORD_HEAVY = 2   # subordinators with 0 coordinators = flag
 
 
-def split_sentences(text: str) -> list[str]:
-    # Protect common abbreviations before splitting
-    text = re.sub(r"\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|vs|etc|e\.g|i\.e)\.", r"\1<DOT>", text)
-    sents = SENT_SPLIT.split(text)
-    return [s.replace("<DOT>", ".").strip() for s in sents if s.strip()]
+def analyse_sentence(sent) -> dict:
+    """Analyse a single stanza Sentence and return per-sentence metrics."""
+    words = [w for w in sent.words if w.text.isalpha()]
+    if not words:
+        return {}
 
+    n = len(words)
+    syllables = sum(count_syllables(w.text) for w in words)
+    syl_per_word = syllables / n if n else 0
 
-def tokenise(sentence: str) -> list[str]:
-    return re.findall(r"\b[a-zA-Z']+\b", sentence)
+    content = sum(1 for w in words if is_content_word(w.upos))
+    lex_density = content / n if n else 0
 
+    coord = sum(1 for w in words if w.upos == "CCONJ")
+    subord = sum(1 for w in words if w.upos == "SCONJ")
 
-# ---------------------------------------------------------------------------
-# Part-of-speech approximation (no tagger — rule-based word lists)
-# ---------------------------------------------------------------------------
+    flesch = 206.835 - 1.015 * n - 84.6 * syl_per_word
+    flesch = max(0.0, min(100.0, flesch))
 
-FUNCTION_WORDS = {
-    # determiners
-    "the",
-    "a",
-    "an",
-    "this",
-    "that",
-    "these",
-    "those",
-    "my",
-    "your",
-    "his",
-    "her",
-    "its",
-    "our",
-    "their",
-    "some",
-    "any",
-    "no",
-    "every",
-    "each",
-    "both",
-    "either",
-    "neither",
-    "all",
-    "most",
-    "many",
-    "much",
-    "few",
-    "little",
-    "more",
-    "less",
-    "other",
-    "another",
-    "such",
-    "what",
-    "which",
-    "whose",
-    # pronouns
-    "i",
-    "me",
-    "we",
-    "us",
-    "you",
-    "he",
-    "him",
-    "she",
-    "they",
-    "them",
-    "it",
-    "who",
-    "whom",
-    "whoever",
-    "whatever",
-    "one",
-    "ones",
-    "myself",
-    "yourself",
-    "himself",
-    "herself",
-    "itself",
-    "ourselves",
-    "themselves",
-    # prepositions
-    "in",
-    "on",
-    "at",
-    "by",
-    "for",
-    "with",
-    "about",
-    "against",
-    "between",
-    "into",
-    "through",
-    "during",
-    "before",
-    "after",
-    "above",
-    "below",
-    "to",
-    "from",
-    "up",
-    "down",
-    "out",
-    "off",
-    "over",
-    "under",
-    "again",
-    "further",
-    "then",
-    "once",
-    "of",
-    "as",
-    "per",
-    "via",
-    "re",
-    # coordinating conjunctions
-    "and",
-    "but",
-    "or",
-    "nor",
-    "for",
-    "yet",
-    "so",
-    # subordinating conjunctions
-    "although",
-    "though",
-    "even",
-    "because",
-    "since",
-    "unless",
-    "until",
-    "while",
-    "whereas",
-    "whether",
-    "if",
-    "than",
-    "when",
-    "where",
-    "how",
-    "that",
-    "after",
-    "before",
-    "once",
-    "as",
-    "until",
-    "till",
-    "provided",
-    "assuming",
-    "given",
-    "except",
-    # auxiliaries & copulas
-    "is",
-    "are",
-    "was",
-    "were",
-    "be",
-    "been",
-    "being",
-    "am",
-    "have",
-    "has",
-    "had",
-    "do",
-    "does",
-    "did",
-    "will",
-    "would",
-    "shall",
-    "should",
-    "may",
-    "might",
-    "must",
-    "can",
-    "could",
-    "need",
-    "dare",
-    "ought",
-    "used",
-    # particles / misc
-    "not",
-    "n't",
-    "to",
-    "there",
-    "here",
-    "just",
-    "also",
-    "only",
-    "even",
-    "still",
-    "already",
-    "yet",
-    "both",
-    "either",
-    "too",
-    "very",
-    "quite",
-    "rather",
-    "really",
-    "just",
-    "then",
-    "now",
-    "so",
-    "well",
-    "oh",
-    "ah",
-    "yes",
-    "no",
-    "hey",
-    "please",
-    "thank",
-    "thanks",
-}
+    # Build list of flags for this sentence
+    flags = []
+    if n > THRESH_LONG:
+        flags.append(f"long ({n} words)")
+    if lex_density > THRESH_DENSE:
+        flags.append(f"dense (lex {lex_density:.0%})")
+    if syl_per_word > THRESH_SYLLABLE:
+        flags.append(f"hard words ({syl_per_word:.2f} syl/w)")
+    if subord >= THRESH_SUBORD_HEAVY and coord == 0:
+        flags.append(f"subordination-heavy ({subord} subord, 0 coord)")
 
-COORD_CONJUNCTIONS = {"and", "but", "so", "or", "nor", "yet", "for"}
+    # Reconstruct the sentence text from tokens
+    text = sent.text
 
-SUBORD_CONJUNCTIONS = {
-    "although",
-    "though",
-    "because",
-    "since",
-    "unless",
-    "until",
-    "while",
-    "whereas",
-    "whether",
-    "if",
-    "whenever",
-    "wherever",
-    "however",
-    "whatever",
-    "whichever",
-    "whoever",
-    "after",
-    "before",
-    "once",
-    "as",
-    "till",
-    "provided",
-    "assuming",
-    "given",
-    "except",
-    "insofar",
-    "inasmuch",
-    "notwithstanding",
-}
-
-
-def is_content_word(word: str) -> bool:
-    return word.lower() not in FUNCTION_WORDS and len(word) > 1
+    return {
+        "text": text,
+        "words": n,
+        "syllables_per_word": syl_per_word,
+        "lexical_density": lex_density,
+        "flesch": flesch,
+        "coord": coord,
+        "subord": subord,
+        "flags": flags,
+    }
 
 
 # ---------------------------------------------------------------------------
-# Metrics
+# Document-level analysis
 # ---------------------------------------------------------------------------
 
 
@@ -323,29 +134,32 @@ def flesch_reading_ease(words_per_sent: float, syllables_per_word: float) -> flo
 
 
 def analyse(text: str) -> dict:
-    sentences = split_sentences(text)
-    if not sentences:
-        return {}
+    doc = nlp(text)
 
-    sent_lengths = []  # word counts
-    sent_syllables = []  # syllable counts
-    all_words = []
+    sent_lengths = []
+    sent_syllables = []
+    all_upos = []
     coord_count = 0
     subord_count = 0
+    sent_details = []
 
-    for sent in sentences:
-        words = tokenise(sent)
-        if not words:
+    for sent in doc.sentences:
+        info = analyse_sentence(sent)
+        if not info:
             continue
-        sent_lengths.append(len(words))
-        sent_syllables.append(syllable_count_sentence(words))
-        all_words.extend(w.lower() for w in words)
 
-        for w in words:
-            wl = w.lower()
-            if wl in COORD_CONJUNCTIONS:
+        sent_details.append(info)
+        n = info["words"]
+        sent_lengths.append(n)
+        sent_syllables.append(round(info["syllables_per_word"] * n))
+
+        for w in sent.words:
+            if not w.text.isalpha():
+                continue
+            all_upos.append(w.upos)
+            if w.upos == "CCONJ":
                 coord_count += 1
-            if wl in SUBORD_CONJUNCTIONS:
+            elif w.upos == "SCONJ":
                 subord_count += 1
 
     if not sent_lengths:
@@ -360,13 +174,13 @@ def analyse(text: str) -> dict:
     flesch = flesch_reading_ease(mean_sent_len, syllables_per_word)
     flesch = max(0.0, min(100.0, flesch))
 
-    content_words = sum(1 for w in all_words if is_content_word(w))
+    content_words = sum(1 for upos in all_upos if is_content_word(upos))
     lexical_density = content_words / total_words if total_words else 0
 
     total_conj = coord_count + subord_count
-    coord_ratio = coord_count / total_conj if total_conj else 0.5  # neutral if none
+    coord_ratio = coord_count / total_conj if total_conj else 0.5
 
-    long_sents = sum(1 for l in sent_lengths if l > 30)
+    long_sents = sum(1 for length in sent_lengths if length > 30)
     long_sent_ratio = long_sents / len(sent_lengths)
 
     return {
@@ -381,42 +195,36 @@ def analyse(text: str) -> dict:
         "coord_count": coord_count,
         "subord_count": subord_count,
         "long_sent_ratio": long_sent_ratio,
+        "sent_details": sent_details,
     }
 
 
 # ---------------------------------------------------------------------------
 # Composite orality score
 # ---------------------------------------------------------------------------
-#
-# Each metric is normalised to 0–1 where 1 = most oral.
-# Weights are subjective but calibrated to feel reasonable.
-#
 
 
 def orality_score(m: dict) -> tuple[float, dict[str, float]]:
     components = {}
 
-    # Flesch: 0–100, higher = easier. Oral writing tends ≥ 60.
-    # Map [30, 90] → [0, 1]
+    # Flesch: 0–100, higher = easier. Map [30, 90] → [0, 1]
     components["flesch"] = max(0.0, min(1.0, (m["flesch"] - 30) / 60))
 
-    # Mean sentence length: oral ≈ ≤15 words, written ≈ 25+
-    # Map [30, 8] → [0, 1]  (inverted)
+    # Mean sentence length: Map [30, 8] → [0, 1] (inverted)
     components["sent_length"] = max(0.0, min(1.0, (30 - m["mean_sent_len"]) / 22))
 
-    # Sentence length std dev: variety is oral. Map [0, 8] → [0, 1]
+    # Sentence length std dev: Map [0, 8] → [0, 1]
     components["sent_variety"] = max(0.0, min(1.0, m["std_sent_len"] / 8))
 
-    # Lexical density: oral ≈ 0.35–0.45, written ≈ 0.55+
-    # Map [0.6, 0.35] → [0, 1]  (inverted)
+    # Lexical density: Map [0.6, 0.35] → [0, 1] (inverted)
     components["lexical_density"] = max(
         0.0, min(1.0, (0.6 - m["lexical_density"]) / 0.25)
     )
 
-    # Coordination ratio: higher = more oral. Map [0.3, 0.8] → [0, 1]
+    # Coordination ratio: Map [0.3, 0.8] → [0, 1]
     components["coordination"] = max(0.0, min(1.0, (m["coord_ratio"] - 0.3) / 0.5))
 
-    # Long sentence ratio: lower = more oral. Map [0, 0.3] → [1, 0]  (inverted)
+    # Long sentence ratio: Map [0, 0.3] → [1, 0] (inverted)
     components["long_sents"] = max(0.0, min(1.0, 1.0 - m["long_sent_ratio"] / 0.3))
 
     weights = {
@@ -435,6 +243,8 @@ def orality_score(m: dict) -> tuple[float, dict[str, float]]:
 # ---------------------------------------------------------------------------
 # Rendering
 # ---------------------------------------------------------------------------
+
+MAX_PREVIEW = 70  # max chars to show for sentence previews
 
 
 def bar(value: float, width: int = 30) -> str:
@@ -457,6 +267,13 @@ def score_label(score: float) -> str:
 def fmt_bar(label: str, value: float, lo: str, hi: str, width=24) -> str:
     b = bar(value, width)
     return f"  {label:<22} {b}  ({lo} ◀──▶ {hi})"
+
+
+def truncate(text: str, maxlen: int = MAX_PREVIEW) -> str:
+    text = text.replace("\n", " ").strip()
+    if len(text) <= maxlen:
+        return text
+    return text[: maxlen - 1] + "…"
 
 
 def render(m: dict, score: float, components: dict[str, float], verbose: bool) -> str:
@@ -490,8 +307,28 @@ def render(m: dict, score: float, components: dict[str, float], verbose: bool) -
     )
     lines.append("")
 
+    # Per-sentence diagnostics
+    flagged = [
+        (i, s) for i, s in enumerate(m["sent_details"], 1) if s["flags"]
+    ]
+    if flagged:
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        lines.append(f"  FLAGGED SENTENCES   ({len(flagged)} of {m['sentences']})")
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        lines.append("")
+        for num, s in flagged:
+            lines.append(f"  [{num}] {truncate(s['text'])}")
+            lines.append(f"       ⚑ {', '.join(s['flags'])}")
+            lines.append("")
+    else:
+        lines.append("  No sentences flagged — nice work!")
+        lines.append("")
+
     if verbose:
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         lines.append("  Raw metrics")
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        lines.append("")
         lines.append(f"    Sentences              {m['sentences']}")
         lines.append(f"    Words                  {m['words']}")
         lines.append(f"    Mean sentence length   {m['mean_sent_len']:.1f} words")

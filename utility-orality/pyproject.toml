@@ -11,7 +11,9 @@ name = "orality"
 version = "0.1.0"
 description = "Measure orality of a md file."
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "stanza",
+]
 
 [project.scripts]
 utility-orality = "orality:main"
