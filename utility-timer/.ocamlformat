@@ -1,6 +1,5 @@
-version = 0.27.0
+version = 0.28.1
 profile = conventional
-line-length = 80
-indent-width = 2
+margin = 80
 wrap-comments = true
 ocp-indent-compat = true
