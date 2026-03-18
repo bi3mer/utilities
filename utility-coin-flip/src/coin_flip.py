@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import argparse
 import random
-import time
 import sys
+import time
 
 parser = argparse.ArgumentParser(description="Simulate coin flips.")
-parser.add_argument("numflips", type=int, help="Number of times to flip.")
+parser.add_argument(
+    "--numflips", type=int, default=100, help="Number of times to flip."
+)
 args = parser.parse_args()
 
 if args.numflips < 1:
@@ -60,6 +62,7 @@ COIN_FRAMES = [
     ],
 ]
 
+
 def animate_flip():
     cycles = 2
     for _ in range(cycles):
@@ -77,8 +80,9 @@ def animate_flip():
     for _ in range(3):
         sys.stdout.write("\033[2K\n")  # erase line
 
-    sys.stdout.write("\033[3A")        # return cursor to top of cleared area
+    sys.stdout.write("\033[3A")  # return cursor to top of cleared area
     sys.stdout.flush()
+
 
 def main():
     # Print blank lines so the cursor-up trick has room
@@ -94,6 +98,7 @@ def main():
 
     print(f"  Heads : {heads} ({heads / args.numflips * 100:.1f}%)")
     print(f"  Tails : {tails} ({tails / args.numflips * 100:.1f}%)")
+
 
 if __name__ == "__main__":
     main()
