@@ -1,5 +1,1 @@
-version = 0.28.1
-profile = conventional
-margin = 80
-wrap-comments = true
-ocp-indent-compat = true
+../default-configs/.ocamlformat
