@@ -1,4 +1,4 @@
  (executable
   (public_name utility-timer)
   (name main)
-  (libraries utility_timer unix))
+  (libraries unix))
