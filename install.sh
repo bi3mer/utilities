@@ -20,8 +20,6 @@ for dir in "$ROOT"/*/; do
     name="$(basename "$dir")"
     [ "$name" = "default-configs" ] && continue
 
-    name="$(basename "$dir")"
-
     if [ -f "$dir/pyproject.toml" ]; then
         pkg="$(grep '^name' "$dir/pyproject.toml" | head -1 | sed 's/.*= *"\(.*\)"/\1/')"
         printf "Installing %s (python) ... " "$pkg"
@@ -47,8 +45,8 @@ for dir in "$ROOT"/*/; do
     elif [ -f "$dir/Makefile" ]; then
         printf "Installing %s (make) ... " "$name"
         if make -C "$dir" --quiet 2>&1; then
-            if [ -d "$dir/bin" ]; then
-                for bin in "$dir/bin/"*; do
+            if [ -d "$dir/build" ]; then
+                for bin in "$dir/build/"*; do
                     [ -x "$bin" ] && ln -sf "$(realpath "$bin")" "$BIN/"
                 done
             elif [ -x "$dir/$name" ]; then

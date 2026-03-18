@@ -5,13 +5,13 @@ SRC     := src/main.c
 
 .PHONY: all clean
 
-all: bin/$(NAME)
+all: build/$(NAME)
 
-bin/$(NAME): $(SRC) | bin
-	$(CC) $(CFLAGS) -o $@ $
+build/$(NAME): $(SRC) | build
+	$(CC) $(CFLAGS) -o $@ $<
 
-bin:
-	mkdir -p bin
+build:
+	mkdir -p build
 
 clean:
-	rm -rf bin
+	rm -rf build
