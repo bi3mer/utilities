@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+[tool.setuptools]
+py-modules = ["main"]
+package-dir = {"" = "src"}
+[project]
+name = "invert_pdf"
+version = "0.1.0"
+description = ""
+requires-python = ">=3.10"
+dependencies = []
+[project.scripts]
+utility-invert-pdf = "main:main"
