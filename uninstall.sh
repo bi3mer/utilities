@@ -31,6 +31,11 @@ for dir in "$ROOT"/*/; do
         (cd "$dir" && dune clean) 2>/dev/null || true
         echo "ok"
         removed=$((removed + 1))
+    elif [ -f "$dir/go.mod" ]; then
+        printf "Uninstalling %s (go) ... " "$name"
+        rm -f "$BIN/$name"
+        echo "ok"
+        removed=$((removed + 1))
     elif [ -f "$dir/Makefile" ]; then
         printf "Uninstalling %s (make) ... " "$name"
         for link in "$BIN"/*; do

@@ -2,7 +2,7 @@ let lang = ref ""
 let name = ref ""
 
 let speclist =
-  [ ("-l", Arg.Set_string lang, "Language to scaffold (c, ocaml, python)") ]
+  [ ("-l", Arg.Set_string lang, "Language to scaffold (c, go, ocaml, python)") ]
 
 let usage = "Usage: utility-new <name> -l <lang>"
 
@@ -25,7 +25,7 @@ let () =
     exit 1);
 
   (match !lang with
-  | "c" | "python" | "ocaml" -> ()
+  | "c" | "go" | "python" | "ocaml" -> ()
   | "" ->
       Printf.eprintf "Error: -l <lang> is required\n";
       exit 1
@@ -59,6 +59,18 @@ let () =
       copyfile
         (Filename.concat configs "main.c")
         (Filename.concat src_dir "main.c");
+
+      print_endline "Done!"
+  | "go" ->
+      print_endline "Building go project...";
+
+      (let f = open_out (Filename.concat dir "go.mod") in
+       output_string f (Printf.sprintf "module %s\n\ngo 1.22\n" uname);
+       close_out f);
+
+      copyfile
+        (Filename.concat root (Filename.concat "default-configs" "main.go"))
+        (Filename.concat dir "main.go");
 
       print_endline "Done!"
   | "python" ->

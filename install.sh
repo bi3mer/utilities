@@ -42,6 +42,16 @@ for dir in "$ROOT"/*/; do
             failed=$((failed + 1))
         fi
 
+    elif [ -f "$dir/go.mod" ]; then
+        printf "Installing %s (go) ... " "$name"
+        if (cd "$dir" && go build -o "$BIN/$name" .) 2>&1; then
+            echo "ok"
+            installed=$((installed + 1))
+        else
+            echo "FAILED"
+            failed=$((failed + 1))
+        fi
+
     elif [ -f "$dir/Makefile" ]; then
         printf "Installing %s (make) ... " "$name"
         if make -C "$dir" --quiet 2>&1; then
