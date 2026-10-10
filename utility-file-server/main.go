@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -18,10 +19,28 @@ func logRequests(h http.Handler) http.Handler {
 	})
 }
 
+func lanURLs(port int) []string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	var urls []string
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok || ipnet.IP.IsLoopback() || ipnet.IP.To4() == nil {
+			continue
+		}
+		urls = append(urls, fmt.Sprintf("http://%s:%d/", ipnet.IP, port))
+	}
+	return urls
+}
+
 func main() {
+	lan := flag.Bool("lan", false, "listen on all network interfaces so other devices can connect")
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [port]\n", flag.CommandLine.Name())
+		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [-lan] [port]\n", flag.CommandLine.Name())
 		fmt.Fprintf(flag.CommandLine.Output(), "Serve the current directory over HTTP (default port %d).\n", defaultPort)
+		flag.PrintDefaults()
 	}
 	flag.Parse()
 
@@ -45,7 +64,15 @@ func main() {
 		log.Fatal(err)
 	}
 
-	addr := fmt.Sprintf(":%d", port)
-	fmt.Printf("Serving %s on http://0.0.0.0:%d/ ...\n", dir, port)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	if *lan {
+		addr = fmt.Sprintf(":%d", port)
+		fmt.Printf("Serving %s to your network at:\n", dir)
+		for _, u := range lanURLs(port) {
+			fmt.Printf("  %s\n", u)
+		}
+	} else {
+		fmt.Printf("Serving %s on http://127.0.0.1:%d/ ...\n", dir, port)
+	}
 	log.Fatal(http.ListenAndServe(addr, logRequests(http.FileServer(http.Dir(dir)))))
 }
